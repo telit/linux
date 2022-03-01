@@ -25,7 +25,7 @@ int __must_check mhi_read_reg(struct mhi_controller *mhi_cntrl,
 
 int __must_check mhi_read_reg_field(struct mhi_controller *mhi_cntrl,
 				    void __iomem *base, u32 offset,
-				    u32 mask, u32 shift, u32 *out)
+				    u32 mask, u32 *out)
 {
 	u32 tmp;
 	int ret;
@@ -34,21 +34,20 @@ int __must_check mhi_read_reg_field(struct mhi_controller *mhi_cntrl,
 	if (ret)
 		return ret;
 
-	*out = (tmp & mask) >> shift;
+	*out = (tmp & mask) >> __ffs(mask);
 
 	return 0;
 }
 
 int __must_check mhi_poll_reg_field(struct mhi_controller *mhi_cntrl,
 				    void __iomem *base, u32 offset,
-				    u32 mask, u32 shift, u32 val, u32 delayus)
+				    u32 mask, u32 val, u32 delayus)
 {
 	int ret;
 	u32 out, retry = (mhi_cntrl->timeout_ms * 1000) / delayus;
 
 	while (retry--) {
-		ret = mhi_read_reg_field(mhi_cntrl, base, offset, mask, shift,
-					 &out);
+		ret = mhi_read_reg_field(mhi_cntrl, base, offset, mask, &out);
 		if (ret)
 			return ret;
 
@@ -68,7 +67,7 @@ void mhi_write_reg(struct mhi_controller *mhi_cntrl, void __iomem *base,
 }
 
 void mhi_write_reg_field(struct mhi_controller *mhi_cntrl, void __iomem *base,
-			 u32 offset, u32 mask, u32 shift, u32 val)
+			 u32 offset, u32 mask, u32 val)
 {
 	int ret;
 	u32 tmp;
@@ -78,7 +77,7 @@ void mhi_write_reg_field(struct mhi_controller *mhi_cntrl, void __iomem *base,
 		return;
 
 	tmp &= ~mask;
-	tmp |= (val << shift);
+	tmp |= (val << __ffs(mask));
 	mhi_write_reg(mhi_cntrl, base, offset, tmp);
 }
 
@@ -160,8 +159,7 @@ enum mhi_state mhi_get_mhi_state(struct mhi_controller *mhi_cntrl)
 {
 	u32 state;
 	int ret = mhi_read_reg_field(mhi_cntrl, mhi_cntrl->regs, MHISTATUS,
-				     MHISTATUS_MHISTATE_MASK,
-				     MHISTATUS_MHISTATE_SHIFT, &state);
+				     MHISTATUS_MHISTATE_MASK, &state);
 	return ret ? MHI_STATE_MAX : state;
 }
 EXPORT_SYMBOL_GPL(mhi_get_mhi_state);
