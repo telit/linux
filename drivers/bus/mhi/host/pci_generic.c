@@ -849,6 +849,19 @@ static void health_check(struct timer_list *t)
 			test_bit(MHI_PCI_DEV_SUSPENDED, &mhi_pdev->status))
 		return;
 
+	if (mhi_cntrl->xfp == XFP_STATE_FLASHING) {
+		/* Flashing through USB, wait until users notifies that it has finished */
+		mod_timer(&mhi_pdev->health_check_timer, jiffies + HEALTH_CHECK_PERIOD);
+		return;
+	}
+
+	if (mhi_cntrl->xfp == XFP_STATE_NEED_RESET) {
+		mhi_cntrl->xfp = XFP_STATE_IDLE;
+		dev_dbg(mhi_cntrl->cntrl_dev, "Device needs to be resetted EE = %d\n", mhi_cntrl->ee);
+		queue_work(system_long_wq, &mhi_pdev->recovery_work);
+		return;
+	}
+
 	if (!mhi_pci_is_alive(mhi_cntrl)) {
 		dev_err(mhi_cntrl->cntrl_dev, "Device died\n");
 		queue_work(system_long_wq, &mhi_pdev->recovery_work);
