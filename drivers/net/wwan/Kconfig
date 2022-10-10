@@ -38,13 +38,22 @@ config WWAN_HWSIM
 
 config MHI_WWAN_CTRL
 	tristate "MHI WWAN control driver for QCOM-based PCIe modems"
-	depends on MHI_BUS
+	depends on MHI_BUS && MHI_WWAN_DTR
 	help
 	  MHI WWAN CTRL allows QCOM-based PCIe modems to expose different modem
 	  control protocols/ports to userspace, including AT, MBIM, QMI, DIAG
 	  and FIREHOSE. These protocols can be accessed directly from userspace
 	  (e.g. AT commands) or via libraries/tools (e.g. libmbim, libqmi,
 	  libqcdm...).
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called mhi_wwan_ctrl.
+
+config MHI_WWAN_DTR
+	tristate "MHI WWAN DTR driver for QCOM-based PCIe modems"
+	depends on MHI_BUS
+	help
+	  MHI WWAN DTR allows QCOM-based PCIe modems to expose UART signals.
 
 	  To compile this driver as a module, choose M here: the module will be
 	  called mhi_wwan_ctrl.
