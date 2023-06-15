@@ -1458,7 +1458,7 @@ int mhi_prepare_channel(struct mhi_controller *mhi_cntrl,
 
 	if (mhi_chan->dir == DMA_FROM_DEVICE)
 		mhi_chan->pre_alloc = !!(flags & MHI_CH_INBOUND_ALLOC_BUFS);
-	
+
 	/* Pre-allocate buffer for xfer ring */
 	if (mhi_chan->pre_alloc) {
 		int nr_el = get_nr_avail_ring_elements(mhi_cntrl,
