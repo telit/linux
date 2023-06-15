@@ -27,7 +27,7 @@
 #include <linux/usb/usbnet.h>
 #include <linux/usb/cdc_ncm.h>
 #include <linux/wwan.h>
-#include "backport_mhi_net.h"
+#include "../backport_mhi_net.h"
 
 /* 3500 allows to optimize skb allocation, the skbs will basically fit in
  * one 4K page. Large MBIM packets will simply be split over several MHI

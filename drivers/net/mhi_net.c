@@ -12,15 +12,37 @@
 #include <linux/skbuff.h>
 #include <linux/u64_stats_sync.h>
 #include "backport_mhi_net.h"
-#include "mhi.h"
 
 #define MHI_NET_MIN_MTU		ETH_MIN_MTU
 #define MHI_NET_MAX_MTU		0xffff
 #define MHI_NET_DEFAULT_MTU	0x4000
 
+struct mhi_net_stats {
+	u64_stats_t rx_packets;
+	u64_stats_t rx_bytes;
+	u64_stats_t rx_errors;
+	u64_stats_t tx_packets;
+	u64_stats_t tx_bytes;
+	u64_stats_t tx_errors;
+	u64_stats_t tx_dropped;
+	struct u64_stats_sync tx_syncp;
+	struct u64_stats_sync rx_syncp;
+};
+
+struct mhi_net_dev {
+	struct mhi_device *mdev;
+	struct net_device *ndev;
+	struct sk_buff *skbagg_head;
+	struct sk_buff *skbagg_tail;
+	struct delayed_work rx_refill;
+	struct mhi_net_stats stats;
+	u32 rx_queue_sz;
+	int msg_enable;
+	unsigned int mru;
+};
+
 struct mhi_device_info {
 	const char *netname;
-	const struct mhi_net_proto *proto;
 };
 
 static int mhi_ndo_open(struct net_device *ndev)
@@ -52,15 +74,8 @@ static int mhi_ndo_stop(struct net_device *ndev)
 static netdev_tx_t mhi_ndo_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct mhi_net_dev *mhi_netdev = netdev_priv(ndev);
-	const struct mhi_net_proto *proto = mhi_netdev->proto;
 	struct mhi_device *mdev = mhi_netdev->mdev;
 	int err;
-
-	if (proto && proto->tx_fixup) {
-		skb = proto->tx_fixup(mhi_netdev, skb);
-		if (unlikely(!skb))
-			goto exit_drop;
-	}
 
 	err = mhi_queue_skb(mdev, DMA_TO_DEVICE, skb, skb->len, MHI_EOT);
 	if (unlikely(err)) {
@@ -94,8 +109,6 @@ static void mhi_ndo_get_stats64(struct net_device *ndev,
 		stats->rx_packets = u64_stats_read(&mhi_netdev->stats.rx_packets);
 		stats->rx_bytes = u64_stats_read(&mhi_netdev->stats.rx_bytes);
 		stats->rx_errors = u64_stats_read(&mhi_netdev->stats.rx_errors);
-		stats->rx_dropped = u64_stats_read(&mhi_netdev->stats.rx_dropped);
-		stats->rx_length_errors = u64_stats_read(&mhi_netdev->stats.rx_length_errors);
 	} while (u64_stats_fetch_retry_irq(&mhi_netdev->stats.rx_syncp, start));
 
 	do {
@@ -158,7 +171,6 @@ static void mhi_net_dl_callback(struct mhi_device *mhi_dev,
 				struct mhi_result *mhi_res)
 {
 	struct mhi_net_dev *mhi_netdev = dev_get_drvdata(&mhi_dev->dev);
-	const struct mhi_net_proto *proto = mhi_netdev->proto;
 	struct sk_buff *skb = mhi_res->buf_addr;
 	int free_desc_count;
 
@@ -198,11 +210,6 @@ static void mhi_net_dl_callback(struct mhi_device *mhi_dev,
 			mhi_netdev->skbagg_head = NULL;
 		}
 
-		u64_stats_update_begin(&mhi_netdev->stats.rx_syncp);
-		u64_stats_inc(&mhi_netdev->stats.rx_packets);
-		u64_stats_add(&mhi_netdev->stats.rx_bytes, skb->len);
-		u64_stats_update_end(&mhi_netdev->stats.rx_syncp);
-
 		switch (skb->data[0] & 0xf0) {
 		case 0x40:
 			skb->protocol = htons(ETH_P_IP);
@@ -215,10 +222,11 @@ static void mhi_net_dl_callback(struct mhi_device *mhi_dev,
 			break;
 		}
 
-		if (proto && proto->rx)
-			proto->rx(mhi_netdev, skb);
-		else
-			netif_rx(skb);
+		u64_stats_update_begin(&mhi_netdev->stats.rx_syncp);
+		u64_stats_inc(&mhi_netdev->stats.rx_packets);
+		u64_stats_add(&mhi_netdev->stats.rx_bytes, skb->len);
+		u64_stats_update_end(&mhi_netdev->stats.rx_syncp);
+		netif_rx(skb);
 	}
 
 	/* Refill if RX buffers queue becomes low */
@@ -241,7 +249,6 @@ static void mhi_net_ul_callback(struct mhi_device *mhi_dev,
 
 	u64_stats_update_begin(&mhi_netdev->stats.tx_syncp);
 	if (unlikely(mhi_res->transaction_status)) {
-
 		/* MHI layer stopping/resetting the UL channel */
 		if (mhi_res->transaction_status == -ENOTCONN) {
 			u64_stats_update_end(&mhi_netdev->stats.tx_syncp);
@@ -295,32 +302,18 @@ static void mhi_net_rx_refill_work(struct work_struct *work)
 		schedule_delayed_work(&mhi_netdev->rx_refill, HZ / 2);
 }
 
-static struct device_type wwan_type = {
-	.name = "wwan",
-};
-
-static int mhi_net_probe(struct mhi_device *mhi_dev,
-			 const struct mhi_device_id *id)
+static int mhi_net_newlink(struct mhi_device *mhi_dev, struct net_device *ndev)
 {
-	const struct mhi_device_info *info = (struct mhi_device_info *)id->driver_data;
-	struct device *dev = &mhi_dev->dev;
 	struct mhi_net_dev *mhi_netdev;
-	struct net_device *ndev;
 	int err;
 
-	ndev = alloc_netdev(sizeof(*mhi_netdev), info->netname,
-			    NET_NAME_PREDICTABLE, mhi_net_setup);
-	if (!ndev)
-		return -ENOMEM;
-
 	mhi_netdev = netdev_priv(ndev);
-	dev_set_drvdata(dev, mhi_netdev);
+
+	dev_set_drvdata(&mhi_dev->dev, mhi_netdev);
 	mhi_netdev->ndev = ndev;
 	mhi_netdev->mdev = mhi_dev;
 	mhi_netdev->skbagg_head = NULL;
-	mhi_netdev->proto = info->proto;
-	SET_NETDEV_DEV(ndev, &mhi_dev->dev);
-	SET_NETDEV_DEVTYPE(ndev, &wwan_type);
+	mhi_netdev->mru = mhi_dev->mhi_cntrl->mru;
 
 	INIT_DELAYED_WORK(&mhi_netdev->rx_refill, mhi_net_rx_refill_work);
 	u64_stats_init(&mhi_netdev->stats.rx_syncp);
@@ -336,34 +329,56 @@ static int mhi_net_probe(struct mhi_device *mhi_dev,
 
 	err = register_netdev(ndev);
 	if (err)
-		goto out_err;
-
-	if (mhi_netdev->proto) {
-		err = mhi_netdev->proto->init(mhi_netdev);
-		if (err)
-			goto out_err_proto;
-	}
+		return err;
 
 	return 0;
 
-out_err_proto:
-	unregister_netdev(ndev);
 out_err:
 	free_netdev(ndev);
 	return err;
+}
+
+static void mhi_net_dellink(struct mhi_device *mhi_dev, struct net_device *ndev)
+{
+	struct mhi_net_dev *mhi_netdev = netdev_priv(ndev);
+
+	unregister_netdev(ndev);
+
+	mhi_unprepare_from_transfer(mhi_dev);
+
+	kfree_skb(mhi_netdev->skbagg_head);
+
+	dev_set_drvdata(&mhi_dev->dev, NULL);
+}
+
+static int mhi_net_probe(struct mhi_device *mhi_dev,
+			 const struct mhi_device_id *id)
+{
+	const struct mhi_device_info *info = (struct mhi_device_info *)id->driver_data;
+	struct net_device *ndev;
+	int err;
+
+	ndev = alloc_netdev(sizeof(struct mhi_net_dev), info->netname,
+			    NET_NAME_PREDICTABLE, mhi_net_setup);
+	if (!ndev)
+		return -ENOMEM;
+
+	SET_NETDEV_DEV(ndev, &mhi_dev->dev);
+
+	err = mhi_net_newlink(mhi_dev, ndev);
+	if (err) {
+		free_netdev(ndev);
+		return err;
+	}
+
+	return 0;
 }
 
 static void mhi_net_remove(struct mhi_device *mhi_dev)
 {
 	struct mhi_net_dev *mhi_netdev = dev_get_drvdata(&mhi_dev->dev);
 
-	unregister_netdev(mhi_netdev->ndev);
-
-	mhi_unprepare_from_transfer(mhi_netdev->mdev);
-
-	kfree_skb(mhi_netdev->skbagg_head);
-
-	free_netdev(mhi_netdev->ndev);
+	mhi_net_dellink(mhi_dev, mhi_netdev->ndev);
 }
 
 static const struct mhi_device_info mhi_hwip0 = {
@@ -374,18 +389,11 @@ static const struct mhi_device_info mhi_swip0 = {
 	.netname = "mhi_swip%d",
 };
 
-static const struct mhi_device_info mhi_hwip0_mbim = {
-	.netname = "mhi_mbim%d",
-	.proto = &proto_mbim,
-};
-
 static const struct mhi_device_id mhi_net_id_table[] = {
 	/* Hardware accelerated data PATH (to modem IPA), protocol agnostic */
 	{ .chan = "IP_HW0", .driver_data = (kernel_ulong_t)&mhi_hwip0 },
 	/* Software data PATH (to modem CPU) */
 	{ .chan = "IP_SW0", .driver_data = (kernel_ulong_t)&mhi_swip0 },
-	/* Hardware accelerated data PATH (to modem IPA), MBIM protocol */
-	{ .chan = "IP_HW0_MBIM", .driver_data = (kernel_ulong_t)&mhi_hwip0_mbim },
 	{}
 };
 MODULE_DEVICE_TABLE(mhi, mhi_net_id_table);
