@@ -334,7 +334,7 @@ static void mhi_mbim_rx(struct mhi_mbim_context *mbim, struct sk_buff *skb)
 			u64_stats_add(&link->rx_bytes, skbn->len);
 			u64_stats_update_end(&link->rx_syncp);
 
-			netif_rx(skbn);
+			__netif_rx(skbn);
 		}
 unlock:
 		rcu_read_unlock();
