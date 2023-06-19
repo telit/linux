@@ -47,6 +47,36 @@ struct mhi_pci_dev_info {
 	bool sideband_wake;
 };
 
+#define MHI_CHANNEL_CONFIG_AMSS_SBL_UL(ch_num, ch_name, el_count, ev_ring) \
+	{						\
+		.num = ch_num,				\
+		.name = ch_name,			\
+		.num_elements = el_count,		\
+		.event_ring = ev_ring,			\
+		.dir = DMA_TO_DEVICE,			\
+		.ee_mask = BIT(MHI_EE_SBL) | BIT(MHI_EE_AMSS),		\
+		.pollcfg = 0,				\
+		.doorbell = MHI_DB_BRST_DISABLE,	\
+		.lpm_notify = false,			\
+		.offload_channel = false,		\
+		.doorbell_mode_switch = false,		\
+	}						\
+
+#define MHI_CHANNEL_CONFIG_AMSS_SBL_DL(ch_num, ch_name, el_count, ev_ring) \
+	{						\
+		.num = ch_num,				\
+		.name = ch_name,			\
+		.num_elements = el_count,		\
+		.event_ring = ev_ring,			\
+		.dir = DMA_FROM_DEVICE,			\
+		.ee_mask = BIT(MHI_EE_SBL) | BIT(MHI_EE_AMSS),		\
+		.pollcfg = 0,				\
+		.doorbell = MHI_DB_BRST_DISABLE,	\
+		.lpm_notify = false,			\
+		.offload_channel = false,		\
+		.doorbell_mode_switch = false,		\
+	}
+
 #define MHI_CHANNEL_CONFIG_UL(ch_num, ch_name, el_count, ev_ring) \
 	{						\
 		.num = ch_num,				\
@@ -501,16 +531,18 @@ static const struct mhi_pci_dev_info mhi_telit_fn980_hw_v1_info = {
 static const struct mhi_channel_config mhi_telit_fn990_channels[] = {
 	MHI_CHANNEL_CONFIG_UL_SBL(2, "SAHARA", 32, 0),
 	MHI_CHANNEL_CONFIG_DL_SBL(3, "SAHARA", 32, 0),
-	MHI_CHANNEL_CONFIG_UL(4, "DIAG", 64, 1),
-	MHI_CHANNEL_CONFIG_DL(5, "DIAG", 64, 1),
+	MHI_CHANNEL_CONFIG_AMSS_SBL_UL(4, "DIAG", 64, 1),
+	MHI_CHANNEL_CONFIG_AMSS_SBL_DL(5, "DIAG", 64, 1),
 	MHI_CHANNEL_CONFIG_UL(12, "MBIM", 32, 0),
 	MHI_CHANNEL_CONFIG_DL(13, "MBIM", 32, 0),
+	MHI_CHANNEL_CONFIG_UL(18, "IP_CTRL", 8, 1),
+	MHI_CHANNEL_CONFIG_DL_AUTOQUEUE(19, "IP_CTRL", 8, 1),
 	MHI_CHANNEL_CONFIG_UL(32, "DUN", 32, 0),
 	MHI_CHANNEL_CONFIG_DL(33, "DUN", 32, 0),
 	MHI_CHANNEL_CONFIG_UL(92, "DUN2", 32, 1),
 	MHI_CHANNEL_CONFIG_DL(93, "DUN2", 32, 1),
-        MHI_CHANNEL_CONFIG_UL(94, "NMEA", 8, 1),
-        MHI_CHANNEL_CONFIG_DL(95, "NMEA", 8, 1),
+	MHI_CHANNEL_CONFIG_UL(94, "NMEA", 8, 1),
+	MHI_CHANNEL_CONFIG_DL(95, "NMEA", 8, 1),
 	MHI_CHANNEL_CONFIG_HW_UL(100, "IP_HW0_MBIM", 128, 2),
 	MHI_CHANNEL_CONFIG_HW_DL(101, "IP_HW0_MBIM", 128, 3),
 };
@@ -818,6 +850,19 @@ static void health_check(struct timer_list *t)
 	if (!test_bit(MHI_PCI_DEV_STARTED, &mhi_pdev->status) ||
 			test_bit(MHI_PCI_DEV_SUSPENDED, &mhi_pdev->status))
 		return;
+
+	if (mhi_cntrl->xfp == XFP_STATE_FLASHING) {
+		/* Flashing through USB, wait until users notifies that it has finished */
+		mod_timer(&mhi_pdev->health_check_timer, jiffies + HEALTH_CHECK_PERIOD);
+		return;
+	}
+
+	if (mhi_cntrl->xfp == XFP_STATE_NEED_RESET) {
+		mhi_cntrl->xfp = XFP_STATE_IDLE;
+		dev_dbg(mhi_cntrl->cntrl_dev, "Device needs to be resetted EE = %d\n", mhi_cntrl->ee);
+		queue_work(system_long_wq, &mhi_pdev->recovery_work);
+		return;
+	}
 
 	if (!mhi_pci_is_alive(mhi_cntrl)) {
 		dev_err(mhi_cntrl->cntrl_dev, "Device died\n");

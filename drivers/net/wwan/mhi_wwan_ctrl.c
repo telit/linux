@@ -104,6 +104,8 @@ static void mhi_wwan_ctrl_refill_work(struct work_struct *work)
 	}
 }
 
+int mhi_wwan_dtr_set(struct wwan_port *port, int dtr, int rts);
+
 static int mhi_wwan_ctrl_start(struct wwan_port *port)
 {
 	struct mhi_wwan_dev *mhiwwan = wwan_port_get_drvdata(port);
@@ -123,12 +125,18 @@ static int mhi_wwan_ctrl_start(struct wwan_port *port)
 		mhi_wwan_ctrl_refill_work(&mhiwwan->rx_refill);
 	}
 
+	dev_dbg(&mhiwwan->mhi_dev->dev, "Setting DTR and RTS for port\n");
+	mhi_wwan_dtr_set(port, 1, 1);
+
 	return 0;
 }
 
 static void mhi_wwan_ctrl_stop(struct wwan_port *port)
 {
 	struct mhi_wwan_dev *mhiwwan = wwan_port_get_drvdata(port);
+
+	dev_dbg(&mhiwwan->mhi_dev->dev, "Unsetting DTR and RTS for port\n");
+	mhi_wwan_dtr_set(port, 0, 0);
 
 	spin_lock_bh(&mhiwwan->rx_lock);
 	clear_bit(MHI_WWAN_RX_REFILL, &mhiwwan->flags);
