@@ -1,2 +1,2 @@
 # Host MHI stack
-obj-y += host/
+obj-$(CONFIG_MHI_BUS) += host/
