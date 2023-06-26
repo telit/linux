@@ -4443,6 +4443,27 @@ static int netif_rx_internal(struct sk_buff *skb)
 }
 
 /**
+ *     __netif_rx      -       Slightly optimized version of netif_rx
+ *     @skb: buffer to post
+ *
+ *     This behaves as netif_rx except that it does not disable bottom halves.
+ *     As a result this function may only be invoked from the interrupt context
+ *     (either hard or soft interrupt).
+ */
+int __netif_rx(struct sk_buff *skb)
+{
+	int ret;
+
+	lockdep_assert_once(hardirq_count() | softirq_count());
+
+	trace_netif_rx_entry(skb);
+	ret = netif_rx_internal(skb);
+	trace_netif_rx_exit(ret);
+	return ret;
+}
+EXPORT_SYMBOL(__netif_rx);
+
+/**
  *	netif_rx	-	post buffer to the network code
  *	@skb: buffer to post
  *

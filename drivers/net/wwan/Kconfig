@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Wireless WAN device configuration
+#
+
+menu "Wireless WAN"
+
+config WWAN
+	tristate "WWAN Driver Core"
+	help
+	  Say Y here if you want to use the WWAN driver core. This driver
+	  provides a common framework for WWAN drivers.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called wwan.
+
+if WWAN
+
+config WWAN_DEBUGFS
+        bool "WWAN devices debugfs interface" if EXPERT
+        depends on DEBUG_FS
+        default y
+        help
+          Enables debugfs infrastructure for the WWAN core and device drivers.
+
+          If this option is selected, then you can find the debug interface
+          elements for each WWAN device in a directory that is corresponding to
+          the device name: debugfs/wwan/wwanX.
+
+config MHI_WWAN_MBIM
+        tristate "MHI WWAN MBIM network driver for QCOM-based PCIe modems"
+        depends on MHI_BUS
+        help
+          MHI WWAN MBIM is a WWAN network driver for QCOM-based PCIe modems.
+          It implements MBIM over MHI, for IP data aggregation and muxing.
+          A default wwan0 network interface is created for MBIM data session
+          ID 0. Additional links can be created via wwan rtnetlink type.
+
+          To compile this driver as a module, choose M here: the module will be
+          called mhi_wwan_mbim.
+
+config MHI_WWAN_CTRL
+	tristate "MHI WWAN control driver for QCOM-based PCIe modems"
+	select WWAN_CORE
+	select MHI_WWAN_DTR
+	depends on MHI_BUS
+	help
+	  MHI WWAN CTRL allows QCOM-based PCIe modems to expose different modem
+	  control protocols/ports to userspace, including AT, MBIM, QMI, DIAG
+	  and FIREHOSE. These protocols can be accessed directly from userspace
+	  (e.g. AT commands) or via libraries/tools (e.g. libmbim, libqmi,
+	  libqcdm...).
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called mhi_wwan_ctrl.
+
+config MHI_WWAN_DTR
+	tristate "MHI WWAN DTR driver for QCOM-based PCIe modems"
+	depends on MHI_BUS
+	help
+	  MHI WWAN DTR allows QCOM-based PCIe modems to expose UART signals.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called mhi_wwan_ctrl.
+
+endif # WWAN
+
+endmenu
