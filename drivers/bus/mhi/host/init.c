@@ -1115,8 +1115,10 @@ int mhi_prepare_for_power_up(struct mhi_controller *mhi_cntrl)
 	mutex_lock(&mhi_cntrl->pm_mutex);
 
 	ret = mhi_init_dev_ctxt(mhi_cntrl);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "Unable to init dev context\n");
 		goto error_dev_ctxt;
+	}
 
 	ret = mhi_read_reg(mhi_cntrl, mhi_cntrl->regs, BHIOFF, &bhi_off);
 	if (ret) {
@@ -1167,6 +1169,7 @@ int mhi_prepare_for_power_up(struct mhi_controller *mhi_cntrl)
 			ret = mhi_rddm_prepare(mhi_cntrl,
 					       mhi_cntrl->rddm_image);
 			if (ret) {
+				dev_err(dev, "Error mhi_rddm_prepare\n");
 				mhi_free_bhie_table(mhi_cntrl,
 						    mhi_cntrl->rddm_image);
 				goto error_reg_offset;
