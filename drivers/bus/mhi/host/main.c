@@ -323,6 +323,11 @@ int mhi_destroy_device(struct device *dev, void *data)
 	dev_dbg(&mhi_cntrl->mhi_dev->dev, "destroy device for chan:%s\n",
 		 mhi_dev->name);
 
+	if (!strcmp(mhi_dev->name, "IP_CTRL")) {
+		dev_dbg(dev, "destroying IP_CTRL\n");
+		mhi_cntrl->mhi_dev_ip_ctrl = NULL;
+	}
+
 	/* Notify the client and remove the device from MHI bus */
 	device_del(dev);
 	put_device(dev);
@@ -423,6 +428,12 @@ void mhi_create_devices(struct mhi_controller *mhi_cntrl)
 		ret = device_add(&mhi_dev->dev);
 		if (ret)
 			put_device(&mhi_dev->dev);
+		else {
+			if (!strcmp(mhi_dev->name, "IP_CTRL")) {
+				dev_dbg(dev, "IP_CTRL supported\n");
+				mhi_cntrl->mhi_dev_ip_ctrl = mhi_dev;
+			}
+		}
 	}
 }
 
@@ -430,11 +441,24 @@ irqreturn_t mhi_irq_handler(int irq_number, void *dev)
 {
 	struct mhi_event *mhi_event = dev;
 	struct mhi_controller *mhi_cntrl = mhi_event->mhi_cntrl;
-	struct mhi_event_ctxt *er_ctxt =
-		&mhi_cntrl->mhi_ctxt->er_ctxt[mhi_event->er_index];
+	struct mhi_event_ctxt *er_ctxt;
 	struct mhi_ring *ev_ring = &mhi_event->ring;
-	dma_addr_t ptr = le64_to_cpu(er_ctxt->rp);
+	dma_addr_t ptr;
 	void *dev_rp;
+
+	/*
+	 * If CONFIG_DEBUG_SHIRQ is set, the IRQ handler will get invoked during __free_irq()
+	 * and by that time mhi_ctxt() would've freed. So check for the existence of mhi_ctxt
+	 * before handling the IRQs.
+	 */
+	if (!mhi_cntrl->mhi_ctxt) {
+		dev_dbg(&mhi_cntrl->mhi_dev->dev,
+			"mhi_ctxt has been freed\n");
+		return IRQ_HANDLED;
+	}
+
+	er_ctxt = &mhi_cntrl->mhi_ctxt->er_ctxt[mhi_event->er_index];
+	ptr = le64_to_cpu(er_ctxt->rp);
 
 	if (!is_valid_ring_ptr(ev_ring, ptr)) {
 		dev_err(&mhi_cntrl->mhi_dev->dev,
@@ -490,7 +514,7 @@ irqreturn_t mhi_intvec_threaded_handler(int irq_number, void *priv)
 	}
 	write_unlock_irq(&mhi_cntrl->pm_lock);
 
-	if (pm_state != MHI_PM_SYS_ERR_DETECT || ee == mhi_cntrl->ee)
+	if (pm_state != MHI_PM_SYS_ERR_DETECT)
 		goto exit_intvec;
 
 	switch (ee) {

@@ -79,6 +79,32 @@ const char *to_mhi_pm_state_str(u32 state)
 	return mhi_pm_state_str[index];
 }
 
+static ssize_t fw_update_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mhi_device *mhi_dev = to_mhi_device(dev);
+	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
+
+	return sprintf(buf, "%u\n", mhi_cntrl->xfp);
+}
+
+static ssize_t fw_update_store(struct device *dev,  struct device_attribute *attr, const char *buf, size_t len)
+{
+	struct mhi_device *mhi_dev = to_mhi_device(dev);
+	struct mhi_controller *mhi_cntrl = mhi_dev->mhi_cntrl;
+	bool enable;
+
+	if (strtobool(buf, &enable))
+		return -EINVAL;
+
+	if (enable)
+		mhi_cntrl->xfp = XFP_STATE_FLASHING;
+	else
+		mhi_cntrl->xfp = XFP_STATE_NEED_RESET;
+
+	return len;
+}
+static DEVICE_ATTR_RW(fw_update);
+
 static ssize_t serial_number_show(struct device *dev,
 				  struct device_attribute *attr,
 				  char *buf)
@@ -124,6 +150,7 @@ static struct attribute *mhi_dev_attrs[] = {
 	&dev_attr_serial_number.attr,
 	&dev_attr_oem_pk_hash.attr,
 	&dev_attr_soc_reset.attr,
+	&dev_attr_fw_update.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(mhi_dev);
@@ -178,6 +205,12 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 				   "bhi", mhi_cntrl);
 	if (ret)
 		return ret;
+	/*
+	 * IRQs should be enabled during mhi_async_power_up(), so disable them explicitly here.
+	 * Due to the use of IRQF_SHARED flag as default while requesting IRQs, we assume that
+	 * IRQ_NOAUTOEN is not applicable.
+	 */
+	disable_irq(mhi_cntrl->irq[0]);
 
 	for (i = 0; i < mhi_cntrl->total_ev_rings; i++, mhi_event++) {
 		if (mhi_event->offload_ev)
@@ -199,6 +232,8 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 				mhi_cntrl->irq[mhi_event->irq], i);
 			goto error_request;
 		}
+
+		disable_irq(mhi_cntrl->irq[mhi_event->irq]);
 	}
 
 	return 0;
@@ -978,12 +1013,16 @@ int mhi_register_controller(struct mhi_controller *mhi_cntrl,
 		goto err_destroy_wq;
 	}
 
+	ret = mhi_init_irq_setup(mhi_cntrl);
+	if (ret)
+		goto err_ida_free;
+
 	/* Register controller with MHI bus */
 	mhi_dev = mhi_alloc_device(mhi_cntrl);
 	if (IS_ERR(mhi_dev)) {
 		dev_err(mhi_cntrl->cntrl_dev, "Failed to allocate MHI device\n");
 		ret = PTR_ERR(mhi_dev);
-		goto err_ida_free;
+		goto error_setup_irq;
 	}
 
 	mhi_dev->dev_type = MHI_DEVICE_CONTROLLER;
@@ -1006,6 +1045,8 @@ int mhi_register_controller(struct mhi_controller *mhi_cntrl,
 
 err_release_dev:
 	put_device(&mhi_dev->dev);
+error_setup_irq:
+	mhi_deinit_free_irq(mhi_cntrl);
 err_ida_free:
 	ida_free(&mhi_controller_ida, mhi_cntrl->index);
 err_destroy_wq:
@@ -1026,6 +1067,7 @@ void mhi_unregister_controller(struct mhi_controller *mhi_cntrl)
 	struct mhi_chan *mhi_chan = mhi_cntrl->mhi_chan;
 	unsigned int i;
 
+	mhi_deinit_free_irq(mhi_cntrl);
 	mhi_destroy_debugfs(mhi_cntrl);
 
 	destroy_workqueue(mhi_cntrl->hiprio_wq);
@@ -1073,8 +1115,10 @@ int mhi_prepare_for_power_up(struct mhi_controller *mhi_cntrl)
 	mutex_lock(&mhi_cntrl->pm_mutex);
 
 	ret = mhi_init_dev_ctxt(mhi_cntrl);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "Unable to init dev context\n");
 		goto error_dev_ctxt;
+	}
 
 	ret = mhi_read_reg(mhi_cntrl, mhi_cntrl->regs, BHIOFF, &bhi_off);
 	if (ret) {
@@ -1125,6 +1169,7 @@ int mhi_prepare_for_power_up(struct mhi_controller *mhi_cntrl)
 			ret = mhi_rddm_prepare(mhi_cntrl,
 					       mhi_cntrl->rddm_image);
 			if (ret) {
+				dev_err(dev, "Error mhi_rddm_prepare\n");
 				mhi_free_bhie_table(mhi_cntrl,
 						    mhi_cntrl->rddm_image);
 				goto error_reg_offset;
