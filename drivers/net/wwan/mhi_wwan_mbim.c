@@ -100,7 +100,8 @@ static int mhi_mbim_get_link_mux_id(struct mhi_controller *cntrl)
 {
 	if (strcmp(cntrl->name, "foxconn-dw5934e") == 0 ||
 	    strcmp(cntrl->name, "foxconn-t99w515") == 0 ||
-	    strcmp(cntrl->name, "telit-fe990b") == 0)
+	    strcmp(cntrl->name, "telit-fe990b") == 0 ||
+	    strcmp(cntrl->name, "telit-fn990b40") == 0)
 		return WDS_BIND_MUX_DATA_PORT_MUX_ID;
 
 	return 0;
